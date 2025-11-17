@@ -4,11 +4,16 @@ package v1beta1
 // Follows GCP naming patterns (name-based APIs, not ID-based like AWS).
 // See https://google.aip.dev/122 for GCP resource name standards.
 type GCPResourceReference struct {
-	// name is the name of the GCP resource
+	// name is the name of the GCP resource.
+	// Must conform to GCP resource naming standards: lowercase letters, numbers, and hyphens only.
+	// Must start and end with lowercase letter or number, max 63 characters.
+	// See https://google.aip.dev/122 for details.
+	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-z]([a-z0-9]*(-[a-z0-9]+)*)?$`
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="!self.contains('--')", message="GCP resource names cannot contain consecutive hyphens"
 	Name string `json:"name"`
 }
 
@@ -51,8 +56,10 @@ type GCPPlatformSpec struct {
 	// +immutable
 	// +kubebuilder:validation:MinLength=6
 	// +kubebuilder:validation:MaxLength=30
-	// +kubebuilder:validation:Pattern=`^[a-z]([a-z0-9]*(-[a-z0-9]+)*)?$`
+	// +kubebuilder:validation:Pattern=`^[a-z]([a-z0-9-]{4,28}[a-z0-9])$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Project is immutable"
+	// +kubebuilder:validation:XValidation:rule="!self.contains('--')", message="Project ID cannot contain consecutive hyphens"
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('-') && !self.endsWith('-')", message="Project ID cannot start or end with a hyphen"
 	Project string `json:"project"`
 
 	// region is the GCP region in which the cluster resides.
@@ -65,6 +72,7 @@ type GCPPlatformSpec struct {
 	//
 	// +required
 	// +immutable
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z]+-[a-z0-9]+[0-9]$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Region is immutable"
@@ -81,4 +89,81 @@ type GCPPlatformSpec struct {
 	// +kubebuilder:default=Private
 	// +optional
 	EndpointAccess GCPEndpointAccessType `json:"endpointAccess,omitempty"`
+
+	// resourceLabels are applied to all GCP resources created for the cluster.
+	// These labels help with resource organization, cost tracking, and management.
+	// Keys and values must conform to GCP label requirements: keys max 63 chars, values max 63 chars.
+	// Both must start with lowercase letter or number, contain only lowercase letters, numbers, underscores, hyphens.
+	// Keys cannot be empty, values can be empty.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxProperties=64
+	ResourceLabels map[string]string `json:"resourceLabels,omitempty"`
+
+	// workloadIdentity configures Workload Identity Federation for the cluster.
+	// This enables secure, short-lived token-based authentication without storing
+	// long-term service account keys.
+	// +required
+	WorkloadIdentity GCPWorkloadIdentityConfig `json:"workloadIdentity"`
+}
+
+// GCPWorkloadIdentityConfig configures Workload Identity Federation for GCP clusters.
+// This enables secure, short-lived token-based authentication without storing
+// long-term service account keys.
+type GCPWorkloadIdentityConfig struct {
+	// projectNumber is the numeric GCP project identifier for WIF configuration.
+	// This differs from the project ID and is required for workload identity pools.
+	// Must be a numeric string (up to 20 digits).
+	//
+	// +required
+	// +kubebuilder:validation:Pattern=`^[0-9]{1,20}$`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=20
+	ProjectNumber string `json:"projectNumber"`
+
+	// poolID is the workload identity pool identifier within the project.
+	// This pool is used to manage external identity mappings.
+	// Must be 4-32 characters, lowercase letters, numbers, and hyphens only.
+	// Cannot start or end with a hyphen.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=4
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]{2,30}[a-z0-9])$`
+	// +kubebuilder:validation:XValidation:rule="!self.contains('--')", message="Pool ID cannot contain consecutive hyphens"
+	PoolID string `json:"poolID"`
+
+	// providerID is the workload identity provider identifier within the pool.
+	// This provider handles the token exchange between external and GCP identities.
+	// Must be 4-32 characters, lowercase letters, numbers, and hyphens only.
+	// Cannot start or end with a hyphen.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=4
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]{2,30}[a-z0-9])$`
+	// +kubebuilder:validation:XValidation:rule="!self.contains('--')", message="Provider ID cannot contain consecutive hyphens"
+	ProviderID string `json:"providerID"`
+
+	// serviceAccountsRef contains references to various Google Service Accounts
+	// required to enable integrations for different controllers and operators.
+	// This follows the AWS pattern of having different roles for different purposes.
+	//
+	// +required
+	ServiceAccountsRef GCPServiceAccountsRef `json:"serviceAccountsRef"`
+}
+
+// GCPServiceAccountsRef contains references to Google Service Accounts for different controllers.
+// Each service account should have the appropriate IAM permissions for its specific role.
+type GCPServiceAccountsRef struct {
+	// nodePoolEmail is the Google Service Account email for CAPG controllers
+	// that manage NodePool infrastructure (VMs, networks, disks, etc.).
+	// This GSA needs compute.*, network.*, and storage.* permissions.
+	// Format: service-account-name@project-id.iam.gserviceaccount.com
+	//
+	// +required
+	// +kubebuilder:validation:Pattern=`^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=100
+	NodePoolEmail string `json:"nodePoolEmail"`
 }

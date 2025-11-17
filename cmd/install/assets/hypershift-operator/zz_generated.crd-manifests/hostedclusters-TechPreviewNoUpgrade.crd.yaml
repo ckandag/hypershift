@@ -5002,11 +5002,19 @@ spec:
                             description: network is the VPC network name
                             properties:
                               name:
-                                description: name is the name of the GCP resource
+                                description: |-
+                                  name is the name of the GCP resource.
+                                  Must conform to GCP resource naming standards: lowercase letters, numbers, and hyphens only.
+                                  Must start and end with lowercase letter or number, max 63 characters.
+                                  See https://google.aip.dev/122 for details.
                                 maxLength: 63
                                 minLength: 1
-                                pattern: ^[a-z]([a-z0-9]*(-[a-z0-9]+)*)?$
+                                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                                 type: string
+                                x-kubernetes-validations:
+                                - message: GCP resource names cannot contain consecutive
+                                    hyphens
+                                  rule: '!self.contains(''--'')'
                             required:
                             - name
                             type: object
@@ -5015,11 +5023,19 @@ spec:
                               for Private Service Connect endpoints
                             properties:
                               name:
-                                description: name is the name of the GCP resource
+                                description: |-
+                                  name is the name of the GCP resource.
+                                  Must conform to GCP resource naming standards: lowercase letters, numbers, and hyphens only.
+                                  Must start and end with lowercase letter or number, max 63 characters.
+                                  See https://google.aip.dev/122 for details.
                                 maxLength: 63
                                 minLength: 1
-                                pattern: ^[a-z]([a-z0-9]*(-[a-z0-9]+)*)?$
+                                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                                 type: string
+                                x-kubernetes-validations:
+                                - message: GCP resource names cannot contain consecutive
+                                    hyphens
+                                  rule: '!self.contains(''--'')'
                             required:
                             - name
                             type: object
@@ -5038,11 +5054,15 @@ spec:
                             valid examples: "my-project", "my-project-1", "my-project-123".
                         maxLength: 30
                         minLength: 6
-                        pattern: ^[a-z]([a-z0-9]*(-[a-z0-9]+)*)?$
+                        pattern: ^[a-z]([a-z0-9-]{4,28}[a-z0-9])$
                         type: string
                         x-kubernetes-validations:
                         - message: Project is immutable
                           rule: self == oldSelf
+                        - message: Project ID cannot contain consecutive hyphens
+                          rule: '!self.contains(''--'')'
+                        - message: Project ID cannot start or end with a hyphen
+                          rule: '!self.startsWith(''-'') && !self.endsWith(''-'')'
                       region:
                         description: |-
                           region is the GCP region in which the cluster resides.
@@ -5053,15 +5073,94 @@ spec:
                             region must not include zone suffixes (e.g., "-a").
                           For a full list of valid regions, see: https://cloud.google.com/compute/docs/regions-zones.
                         maxLength: 63
+                        minLength: 1
                         pattern: ^[a-z]+-[a-z0-9]+[0-9]$
                         type: string
                         x-kubernetes-validations:
                         - message: Region is immutable
                           rule: self == oldSelf
+                      resourceLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          resourceLabels are applied to all GCP resources created for the cluster.
+                          These labels help with resource organization, cost tracking, and management.
+                          Keys and values must conform to GCP label requirements: keys max 63 chars, values max 63 chars.
+                          Both must start with lowercase letter or number, contain only lowercase letters, numbers, underscores, hyphens.
+                          Keys cannot be empty, values can be empty.
+                        maxProperties: 64
+                        type: object
+                      workloadIdentity:
+                        description: |-
+                          workloadIdentity configures Workload Identity Federation for the cluster.
+                          This enables secure, short-lived token-based authentication without storing
+                          long-term service account keys.
+                        properties:
+                          poolID:
+                            description: |-
+                              poolID is the workload identity pool identifier within the project.
+                              This pool is used to manage external identity mappings.
+                              Must be 4-32 characters, lowercase letters, numbers, and hyphens only.
+                              Cannot start or end with a hyphen.
+                            maxLength: 32
+                            minLength: 4
+                            pattern: ^[a-z0-9]([a-z0-9-]{2,30}[a-z0-9])$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: Pool ID cannot contain consecutive hyphens
+                              rule: '!self.contains(''--'')'
+                          projectNumber:
+                            description: |-
+                              projectNumber is the numeric GCP project identifier for WIF configuration.
+                              This differs from the project ID and is required for workload identity pools.
+                              Must be a numeric string (up to 20 digits).
+                            maxLength: 20
+                            minLength: 1
+                            pattern: ^[0-9]{1,20}$
+                            type: string
+                          providerID:
+                            description: |-
+                              providerID is the workload identity provider identifier within the pool.
+                              This provider handles the token exchange between external and GCP identities.
+                              Must be 4-32 characters, lowercase letters, numbers, and hyphens only.
+                              Cannot start or end with a hyphen.
+                            maxLength: 32
+                            minLength: 4
+                            pattern: ^[a-z0-9]([a-z0-9-]{2,30}[a-z0-9])$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: Provider ID cannot contain consecutive hyphens
+                              rule: '!self.contains(''--'')'
+                          serviceAccountsRef:
+                            description: |-
+                              serviceAccountsRef contains references to various Google Service Accounts
+                              required to enable integrations for different controllers and operators.
+                              This follows the AWS pattern of having different roles for different purposes.
+                            properties:
+                              nodePoolEmail:
+                                description: |-
+                                  nodePoolEmail is the Google Service Account email for CAPG controllers
+                                  that manage NodePool infrastructure (VMs, networks, disks, etc.).
+                                  This GSA needs compute.*, network.*, and storage.* permissions.
+                                  Format: service-account-name@project-id.iam.gserviceaccount.com
+                                maxLength: 100
+                                minLength: 1
+                                pattern: ^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$
+                                type: string
+                            required:
+                            - nodePoolEmail
+                            type: object
+                        required:
+                        - poolID
+                        - projectNumber
+                        - providerID
+                        - serviceAccountsRef
+                        type: object
                     required:
                     - networkConfig
                     - project
                     - region
+                    - workloadIdentity
                     type: object
                   ibmcloud:
                     description: ibmcloud defines IBMCloud specific settings for components
