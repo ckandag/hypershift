@@ -5035,6 +5035,17 @@ A failure here indicates that the role or the key are invalid, or the role doesn
 <td><p>ValidAzureKMSConfig indicates whether the given KMS input for the Azure platform is valid and operational
 A failure here indicates that the input is invalid, or permissions are missing to use the encryption key.</p>
 </td>
+</tr><tr><td><p>&#34;ValidGCPCredentials&#34;</p></td>
+<td><p>ValidGCPCredentials indicates if GCP credentials are valid and operational
+for the HostedCluster. This includes service account authentication and
+proper IAM permissions for CAPG controllers.
+A failure here may require external user intervention to resolve.</p>
+</td>
+</tr><tr><td><p>&#34;ValidGCPWorkloadIdentity&#34;</p></td>
+<td><p>ValidGCPWorkloadIdentity indicates if GCP Workload Identity Federation
+is properly configured and operational for the cluster.
+A failure here may require external user intervention to resolve.</p>
+</td>
 </tr><tr><td><p>&#34;ValidConfiguration&#34;</p></td>
 <td><p>ValidHostedClusterConfiguration signals if the hostedCluster input is valid and
 supported by the underlying management cluster.
@@ -5977,6 +5988,37 @@ GCPEndpointAccessType
 Allowed values: &ldquo;Private&rdquo;, &ldquo;PublicAndPrivate&rdquo;. Defaults to &ldquo;Private&rdquo;.</p>
 </td>
 </tr>
+<tr>
+<td>
+<code>resourceLabels</code></br>
+<em>
+map[string]string
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>resourceLabels are applied to all GCP resources created for the cluster.
+These labels help with resource organization, cost tracking, and management.
+Keys and values must conform to GCP label requirements: keys max 63 chars, values max 63 chars.
+Both must start with lowercase letter or number, contain only lowercase letters, numbers, underscores, hyphens.
+Keys cannot be empty, values can be empty.</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>workloadIdentity</code></br>
+<em>
+<a href="#hypershift.openshift.io/v1beta1.GCPWorkloadIdentityConfig">
+GCPWorkloadIdentityConfig
+</a>
+</em>
+</td>
+<td>
+<p>workloadIdentity configures Workload Identity Federation for the cluster.
+This enables secure, short-lived token-based authentication without storing
+long-term service account keys.</p>
+</td>
+</tr>
 </tbody>
 </table>
 ###GCPPrivateServiceConnectSpec { #hypershift.openshift.io/v1beta1.GCPPrivateServiceConnectSpec }
@@ -6153,7 +6195,119 @@ string
 </em>
 </td>
 <td>
-<p>name is the name of the GCP resource</p>
+<p>name is the name of the GCP resource.
+Must conform to GCP resource naming standards: lowercase letters, numbers, and hyphens only.
+Must start and end with lowercase letter or number, max 63 characters.
+See <a href="https://google.aip.dev/122">https://google.aip.dev/122</a> for details.</p>
+</td>
+</tr>
+</tbody>
+</table>
+###GCPServiceAccountsRef { #hypershift.openshift.io/v1beta1.GCPServiceAccountsRef }
+<p>
+(<em>Appears on:</em>
+<a href="#hypershift.openshift.io/v1beta1.GCPWorkloadIdentityConfig">GCPWorkloadIdentityConfig</a>)
+</p>
+<p>
+<p>GCPServiceAccountsRef contains references to Google Service Accounts for different controllers.
+Each service account should have the appropriate IAM permissions for its specific role.</p>
+</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>nodePoolEmail</code></br>
+<em>
+string
+</em>
+</td>
+<td>
+<p>nodePoolEmail is the Google Service Account email for CAPG controllers
+that manage NodePool infrastructure (VMs, networks, disks, etc.).
+This GSA needs compute.<em>, network.</em>, and storage.* permissions.
+Format: service-account-name@project-id.iam.gserviceaccount.com</p>
+</td>
+</tr>
+</tbody>
+</table>
+###GCPWorkloadIdentityConfig { #hypershift.openshift.io/v1beta1.GCPWorkloadIdentityConfig }
+<p>
+(<em>Appears on:</em>
+<a href="#hypershift.openshift.io/v1beta1.GCPPlatformSpec">GCPPlatformSpec</a>)
+</p>
+<p>
+<p>GCPWorkloadIdentityConfig configures Workload Identity Federation for GCP clusters.
+This enables secure, short-lived token-based authentication without storing
+long-term service account keys.</p>
+</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>projectNumber</code></br>
+<em>
+string
+</em>
+</td>
+<td>
+<p>projectNumber is the numeric GCP project identifier for WIF configuration.
+This differs from the project ID and is required for workload identity pools.
+Must be a numeric string (up to 20 digits).</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>poolID</code></br>
+<em>
+string
+</em>
+</td>
+<td>
+<p>poolID is the workload identity pool identifier within the project.
+This pool is used to manage external identity mappings.
+Must be 4-32 characters, lowercase letters, numbers, and hyphens only.
+Cannot start or end with a hyphen.</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>providerID</code></br>
+<em>
+string
+</em>
+</td>
+<td>
+<p>providerID is the workload identity provider identifier within the pool.
+This provider handles the token exchange between external and GCP identities.
+Must be 4-32 characters, lowercase letters, numbers, and hyphens only.
+Cannot start or end with a hyphen.</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>serviceAccountsRef</code></br>
+<em>
+<a href="#hypershift.openshift.io/v1beta1.GCPServiceAccountsRef">
+GCPServiceAccountsRef
+</a>
+</em>
+</td>
+<td>
+<p>serviceAccountsRef contains references to various Google Service Accounts
+required to enable integrations for different controllers and operators.
+This follows the AWS pattern of having different roles for different purposes.</p>
 </td>
 </tr>
 </tbody>
