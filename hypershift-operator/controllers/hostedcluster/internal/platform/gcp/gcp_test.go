@@ -4,34 +4,78 @@ import (
 	"context"
 	"testing"
 
+	"github.com/blang/semver"
 	. "github.com/onsi/gomega"
 
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	capigcp "sigs.k8s.io/cluster-api-provider-gcp/api/v1beta1"
 )
 
 func TestGCPPlatformInterface(t *testing.T) {
 	g := NewWithT(t)
 
 	// Test that GCP implements the Platform interface
-	platform := New()
+	platform := New("test-utilities-image", "test-capg-image", &semver.Version{Major: 4, Minor: 17, Patch: 0})
 	g.Expect(platform).ToNot(BeNil())
 }
 
 func TestReconcileCAPIInfraCR(t *testing.T) {
 	g := NewWithT(t)
 
-	platform := New()
-	fakeClient := fake.NewClientBuilder().Build()
+	platform := New("test-utilities-image", "test-capg-image", &semver.Version{Major: 4, Minor: 17, Patch: 0})
 
-	// Test minimal implementation returns nil (no CAPI infrastructure)
+	// Create a scheme with both HyperShift and CAPG types
+	scheme := runtime.NewScheme()
+	g.Expect(clientgoscheme.AddToScheme(scheme)).To(Succeed())
+	g.Expect(hyperv1.AddToScheme(scheme)).To(Succeed())
+	g.Expect(capigcp.AddToScheme(scheme)).To(Succeed())
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&capigcp.GCPCluster{}).WithObjects().Build()
+
+	// Test CAPI infrastructure reconciliation
 	obj, err := platform.ReconcileCAPIInfraCR(
 		context.Background(),
 		fakeClient,
-		nil, // createOrUpdate function
+		func(ctx context.Context, c client.Client, obj client.Object, f controllerutil.MutateFn) (controllerutil.OperationResult, error) {
+			// Apply the mutation
+			if err := f(); err != nil {
+				return controllerutil.OperationResultNone, err
+			}
+			// Check if object exists
+			key := client.ObjectKeyFromObject(obj)
+			existing := obj.DeepCopyObject().(client.Object)
+			err := c.Get(ctx, key, existing)
+			if client.IgnoreNotFound(err) != nil {
+				return controllerutil.OperationResultNone, err
+			}
+
+			if err != nil {
+				// Object doesn't exist, create it
+				if err := c.Create(ctx, obj); err != nil {
+					return controllerutil.OperationResultNone, err
+				}
+				// Simulate server assignment of metadata by refreshing the object
+				if err := c.Get(ctx, key, obj); err != nil {
+					return controllerutil.OperationResultNone, err
+				}
+				return controllerutil.OperationResultCreated, nil
+			} else {
+				// Object exists, update it
+				obj.SetResourceVersion(existing.GetResourceVersion())
+				if err := c.Update(ctx, obj); err != nil {
+					return controllerutil.OperationResultNone, err
+				}
+				return controllerutil.OperationResultUpdated, nil
+			}
+		}, // createOrUpdate function
 		&hyperv1.HostedCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-cluster",
@@ -43,6 +87,14 @@ func TestReconcileCAPIInfraCR(t *testing.T) {
 					GCP: &hyperv1.GCPPlatformSpec{
 						Project: "test-project",
 						Region:  "us-central1",
+						WorkloadIdentity: hyperv1.GCPWorkloadIdentityConfig{
+							ProjectNumber: "123456789012",
+							PoolID:        "test-pool",
+							ProviderID:    "test-provider",
+							ServiceAccountsRef: hyperv1.GCPServiceAccountsRef{
+								NodePoolEmail: "test-capg-sa@test-project.iam.gserviceaccount.com",
+							},
+						},
 					},
 				},
 			},
@@ -52,13 +104,18 @@ func TestReconcileCAPIInfraCR(t *testing.T) {
 	)
 
 	g.Expect(err).To(BeNil())
-	g.Expect(obj).To(BeNil()) // Minimal implementation returns nil
+	g.Expect(obj).ToNot(BeNil()) // Should create GCPCluster object
+
+	// Verify that the object has the Ready status set
+	gcpCluster, ok := obj.(*capigcp.GCPCluster)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(gcpCluster.Status.Ready).To(BeTrue()) // Critical: Ready status must be set
 }
 
 func TestCAPIProviderDeploymentSpec(t *testing.T) {
 	g := NewWithT(t)
 
-	platform := New()
+	platform := New("test-utilities-image", "test-capg-image", &semver.Version{Major: 4, Minor: 17, Patch: 0})
 
 	// Test minimal implementation returns nil (no CAPI provider)
 	spec, err := platform.CAPIProviderDeploymentSpec(
@@ -73,6 +130,14 @@ func TestCAPIProviderDeploymentSpec(t *testing.T) {
 					GCP: &hyperv1.GCPPlatformSpec{
 						Project: "test-project",
 						Region:  "us-central1",
+						WorkloadIdentity: hyperv1.GCPWorkloadIdentityConfig{
+							ProjectNumber: "123456789012",
+							PoolID:        "test-pool",
+							ProviderID:    "test-provider",
+							ServiceAccountsRef: hyperv1.GCPServiceAccountsRef{
+								NodePoolEmail: "test-capg-sa@test-project.iam.gserviceaccount.com",
+							},
+						},
 					},
 				},
 			},
@@ -81,20 +146,29 @@ func TestCAPIProviderDeploymentSpec(t *testing.T) {
 	)
 
 	g.Expect(err).To(BeNil())
-	g.Expect(spec).To(BeNil()) // Minimal implementation returns nil
+	g.Expect(spec).ToNot(BeNil()) // Should return deployment spec
 }
 
 func TestReconcileCredentials(t *testing.T) {
 	g := NewWithT(t)
 
-	platform := New()
-	fakeClient := fake.NewClientBuilder().Build()
+	platform := New("test-utilities-image", "test-capg-image", &semver.Version{Major: 4, Minor: 17, Patch: 0})
+
+	// Create a scheme with both HyperShift and CAPG types
+	scheme := runtime.NewScheme()
+	g.Expect(clientgoscheme.AddToScheme(scheme)).To(Succeed())
+	g.Expect(hyperv1.AddToScheme(scheme)).To(Succeed())
+	g.Expect(capigcp.AddToScheme(scheme)).To(Succeed())
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&capigcp.GCPCluster{}).Build()
 
 	// Test minimal implementation returns no error
 	err := platform.ReconcileCredentials(
 		context.Background(),
 		fakeClient,
-		nil, // createOrUpdate function
+		func(ctx context.Context, c client.Client, obj client.Object, f controllerutil.MutateFn) (controllerutil.OperationResult, error) {
+			return controllerutil.OperationResultCreated, f()
+		}, // createOrUpdate function
 		&hyperv1.HostedCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-cluster",
@@ -106,6 +180,14 @@ func TestReconcileCredentials(t *testing.T) {
 					GCP: &hyperv1.GCPPlatformSpec{
 						Project: "test-project",
 						Region:  "us-central1",
+						WorkloadIdentity: hyperv1.GCPWorkloadIdentityConfig{
+							ProjectNumber: "123456789012",
+							PoolID:        "test-pool",
+							ProviderID:    "test-provider",
+							ServiceAccountsRef: hyperv1.GCPServiceAccountsRef{
+								NodePoolEmail: "test-capg-sa@test-project.iam.gserviceaccount.com",
+							},
+						},
 					},
 				},
 			},
@@ -119,14 +201,16 @@ func TestReconcileCredentials(t *testing.T) {
 func TestReconcileSecretEncryption(t *testing.T) {
 	g := NewWithT(t)
 
-	platform := New()
+	platform := New("test-utilities-image", "test-capg-image", &semver.Version{Major: 4, Minor: 17, Patch: 0})
 	fakeClient := fake.NewClientBuilder().Build()
 
 	// Test minimal implementation returns no error
 	err := platform.ReconcileSecretEncryption(
 		context.Background(),
 		fakeClient,
-		nil, // createOrUpdate function
+		func(ctx context.Context, c client.Client, obj client.Object, f controllerutil.MutateFn) (controllerutil.OperationResult, error) {
+			return controllerutil.OperationResultCreated, f()
+		}, // createOrUpdate function
 		&hyperv1.HostedCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-cluster",
@@ -138,6 +222,14 @@ func TestReconcileSecretEncryption(t *testing.T) {
 					GCP: &hyperv1.GCPPlatformSpec{
 						Project: "test-project",
 						Region:  "us-central1",
+						WorkloadIdentity: hyperv1.GCPWorkloadIdentityConfig{
+							ProjectNumber: "123456789012",
+							PoolID:        "test-pool",
+							ProviderID:    "test-provider",
+							ServiceAccountsRef: hyperv1.GCPServiceAccountsRef{
+								NodePoolEmail: "test-capg-sa@test-project.iam.gserviceaccount.com",
+							},
+						},
 					},
 				},
 			},
@@ -151,17 +243,17 @@ func TestReconcileSecretEncryption(t *testing.T) {
 func TestCAPIProviderPolicyRules(t *testing.T) {
 	g := NewWithT(t)
 
-	platform := New()
+	platform := New("test-utilities-image", "test-capg-image", &semver.Version{Major: 4, Minor: 17, Patch: 0})
 
-	// Test minimal implementation returns nil
+	// Test implementation follows AWS/Azure pattern - returns nil for standard CAPI RBAC
 	rules := platform.CAPIProviderPolicyRules()
-	g.Expect(rules).To(BeNil()) // Minimal implementation returns nil
+	g.Expect(rules).To(BeNil()) // Should return nil like AWS/Azure platforms
 }
 
 func TestDeleteCredentials(t *testing.T) {
 	g := NewWithT(t)
 
-	platform := New()
+	platform := New("test-utilities-image", "test-capg-image", &semver.Version{Major: 4, Minor: 17, Patch: 0})
 	fakeClient := fake.NewClientBuilder().Build()
 
 	// Test minimal implementation returns no error
@@ -179,6 +271,14 @@ func TestDeleteCredentials(t *testing.T) {
 					GCP: &hyperv1.GCPPlatformSpec{
 						Project: "test-project",
 						Region:  "us-central1",
+						WorkloadIdentity: hyperv1.GCPWorkloadIdentityConfig{
+							ProjectNumber: "123456789012",
+							PoolID:        "test-pool",
+							ProviderID:    "test-provider",
+							ServiceAccountsRef: hyperv1.GCPServiceAccountsRef{
+								NodePoolEmail: "test-capg-sa@test-project.iam.gserviceaccount.com",
+							},
+						},
 					},
 				},
 			},
@@ -187,4 +287,104 @@ func TestDeleteCredentials(t *testing.T) {
 	)
 
 	g.Expect(err).To(BeNil()) // Minimal implementation returns nil
+}
+
+func TestBuildGCPWorkloadIdentityCredentials(t *testing.T) {
+	g := NewWithT(t)
+
+	wif := hyperv1.GCPWorkloadIdentityConfig{
+		ProjectNumber: "123456789012",
+		PoolID:        "test-pool",
+		ProviderID:    "test-provider",
+		ServiceAccountsRef: hyperv1.GCPServiceAccountsRef{
+			NodePoolEmail: "test-capg-sa@test-project.iam.gserviceaccount.com",
+		},
+	}
+
+	credentials, err := buildGCPWorkloadIdentityCredentials(wif)
+	g.Expect(err).To(BeNil())
+	g.Expect(credentials).To(ContainSubstring(`"type": "external_account"`))
+	g.Expect(credentials).To(ContainSubstring("123456789012"))
+	g.Expect(credentials).To(ContainSubstring("test-pool"))
+	g.Expect(credentials).To(ContainSubstring("test-provider"))
+	g.Expect(credentials).To(ContainSubstring("/var/run/secrets/openshift/serviceaccount/token"))
+}
+
+func TestBuildGCPWorkloadIdentityCredentialsValidation(t *testing.T) {
+	g := NewWithT(t)
+
+	tests := []struct {
+		name string
+		wif  hyperv1.GCPWorkloadIdentityConfig
+		expectError bool
+	}{
+		{
+			name: "valid configuration",
+			wif: hyperv1.GCPWorkloadIdentityConfig{
+				ProjectNumber: "123456789012",
+				PoolID:        "test-pool",
+				ProviderID:    "test-provider",
+				ServiceAccountsRef: hyperv1.GCPServiceAccountsRef{
+					NodePoolEmail: "test-capg-sa@test-project.iam.gserviceaccount.com",
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "missing project number",
+			wif: hyperv1.GCPWorkloadIdentityConfig{
+				PoolID:     "test-pool",
+				ProviderID: "test-provider",
+				ServiceAccountsRef: hyperv1.GCPServiceAccountsRef{
+					NodePoolEmail: "test-capg-sa@test-project.iam.gserviceaccount.com",
+				},
+			},
+			expectError: true,
+		},
+		{
+			name: "missing pool ID",
+			wif: hyperv1.GCPWorkloadIdentityConfig{
+				ProjectNumber: "123456789012",
+				ProviderID:    "test-provider",
+				ServiceAccountsRef: hyperv1.GCPServiceAccountsRef{
+					NodePoolEmail: "test-capg-sa@test-project.iam.gserviceaccount.com",
+				},
+			},
+			expectError: true,
+		},
+		{
+			name: "missing provider ID",
+			wif: hyperv1.GCPWorkloadIdentityConfig{
+				ProjectNumber: "123456789012",
+				PoolID:        "test-pool",
+				ServiceAccountsRef: hyperv1.GCPServiceAccountsRef{
+					NodePoolEmail: "test-capg-sa@test-project.iam.gserviceaccount.com",
+				},
+			},
+			expectError: true,
+		},
+		{
+			name: "missing service account email",
+			wif: hyperv1.GCPWorkloadIdentityConfig{
+				ProjectNumber: "123456789012",
+				PoolID:        "test-pool",
+				ProviderID:    "test-provider",
+				ServiceAccountsRef: hyperv1.GCPServiceAccountsRef{
+					NodePoolEmail: "",
+				},
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildGCPWorkloadIdentityCredentials(tt.wif)
+			if tt.expectError {
+				g.Expect(err).ToNot(BeNil())
+			} else {
+				g.Expect(err).To(BeNil())
+			}
+		})
+	}
 }
