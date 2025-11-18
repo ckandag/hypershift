@@ -368,8 +368,8 @@ func (p GCP) ReconcileCredentials(ctx context.Context, c client.Client, createOr
 
 	// Create credential secrets following AWS pattern
 	var errs []error
-	syncSecret := func(secret *corev1.Secret) error {
-		credentials, err := buildGCPWorkloadIdentityCredentials(hcluster.Spec.Platform.GCP.WorkloadIdentity)
+	syncSecret := func(secret *corev1.Secret, serviceAccountEmail string) error {
+		credentials, err := buildGCPWorkloadIdentityCredentialsWithEmail(hcluster.Spec.Platform.GCP.WorkloadIdentity, serviceAccountEmail)
 		if err != nil {
 			return fmt.Errorf("failed to build cloud credentials secret %s/%s: %w", secret.Namespace, secret.Name, err)
 		}
@@ -383,9 +383,13 @@ func (p GCP) ReconcileCredentials(ctx context.Context, c client.Client, createOr
 		return nil
 	}
 
-	// Create NodePool management credentials (used by both NodePool controller and CAPG)
-	if err := syncSecret(NodePoolManagementCredsSecret(controlPlaneNamespace)); err != nil {
-		errs = append(errs, err)
+	for email, secret := range map[string]*corev1.Secret{
+		hcluster.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsRef.NodePoolEmail:     NodePoolManagementCredsSecret(controlPlaneNamespace),
+		hcluster.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsRef.ControlPlaneEmail: ControlPlaneOperatorCredsSecret(controlPlaneNamespace),
+	} {
+		if err := syncSecret(secret, email); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	if len(errs) > 0 {
@@ -410,9 +414,20 @@ func NodePoolManagementCredsSecret(controlPlaneNamespace string) *corev1.Secret 
 	}
 }
 
-// buildGCPWorkloadIdentityCredentials creates the credential configuration for Google Cloud SDK
-// to use Workload Identity Federation. This is equivalent to AWS's buildAWSWebIdentityCredentials.
-func buildGCPWorkloadIdentityCredentials(wif hyperv1.GCPWorkloadIdentityConfig) (string, error) {
+// ControlPlaneOperatorCredsSecret returns the secret containing Workload Identity Federation credentials
+// for the control plane operator.
+func ControlPlaneOperatorCredsSecret(controlPlaneNamespace string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: controlPlaneNamespace,
+			Name:      "control-plane-operator-creds",
+		},
+	}
+}
+
+// buildGCPWorkloadIdentityCredentialsWithEmail creates the credential configuration for Google Cloud SDK
+// to use Workload Identity Federation with a specific service account email.
+func buildGCPWorkloadIdentityCredentialsWithEmail(wif hyperv1.GCPWorkloadIdentityConfig, serviceAccountEmail string) (string, error) {
 	if wif.ProjectNumber == "" {
 		return "", fmt.Errorf("project number cannot be empty in GCP Workload Identity Federation credentials")
 	}
@@ -422,8 +437,8 @@ func buildGCPWorkloadIdentityCredentials(wif hyperv1.GCPWorkloadIdentityConfig) 
 	if wif.ProviderID == "" {
 		return "", fmt.Errorf("provider ID cannot be empty in GCP Workload Identity Federation credentials")
 	}
-	if wif.ServiceAccountsRef.NodePoolEmail == "" {
-		return "", fmt.Errorf("node pool service account email cannot be empty in GCP Workload Identity Federation credentials")
+	if serviceAccountEmail == "" {
+		return "", fmt.Errorf("service account email cannot be empty in GCP Workload Identity Federation credentials")
 	}
 
 	// Create the credential configuration that tells Google Cloud SDK how to use WIF
@@ -441,9 +456,19 @@ func buildGCPWorkloadIdentityCredentials(wif hyperv1.GCPWorkloadIdentityConfig) 
       "type": "text"
     }
   }
-}`, wif.ProjectNumber, wif.PoolID, wif.ProviderID, wif.ServiceAccountsRef.NodePoolEmail)
+}`, wif.ProjectNumber, wif.PoolID, wif.ProviderID, serviceAccountEmail)
 
 	return credentialConfig, nil
+}
+
+// buildGCPWorkloadIdentityCredentials creates the credential configuration for Google Cloud SDK
+// to use Workload Identity Federation. This is equivalent to AWS's buildAWSWebIdentityCredentials.
+// It uses the NodePoolEmail by default for backward compatibility.
+func buildGCPWorkloadIdentityCredentials(wif hyperv1.GCPWorkloadIdentityConfig) (string, error) {
+	if wif.ServiceAccountsRef.NodePoolEmail == "" {
+		return "", fmt.Errorf("node pool service account email cannot be empty in GCP Workload Identity Federation credentials")
+	}
+	return buildGCPWorkloadIdentityCredentialsWithEmail(wif, wif.ServiceAccountsRef.NodePoolEmail)
 }
 
 // ReconcileSecretEncryption is a no-op

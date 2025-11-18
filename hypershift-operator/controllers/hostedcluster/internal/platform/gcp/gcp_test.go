@@ -13,10 +13,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
+	capigcp "sigs.k8s.io/cluster-api-provider-gcp/api/v1beta1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	capigcp "sigs.k8s.io/cluster-api-provider-gcp/api/v1beta1"
 )
 
 func TestGCPPlatformInterface(t *testing.T) {
@@ -314,8 +314,8 @@ func TestBuildGCPWorkloadIdentityCredentialsValidation(t *testing.T) {
 	g := NewWithT(t)
 
 	tests := []struct {
-		name string
-		wif  hyperv1.GCPWorkloadIdentityConfig
+		name        string
+		wif         hyperv1.GCPWorkloadIdentityConfig
 		expectError bool
 	}{
 		{

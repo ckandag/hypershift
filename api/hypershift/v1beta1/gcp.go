@@ -166,4 +166,10 @@ type GCPServiceAccountsRef struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=100
 	NodePoolEmail string `json:"nodePoolEmail"`
+
+	// +required
+	// +kubebuilder:validation:Pattern=`^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=100
+	ControlPlaneEmail string `json:"controlPlaneEmail"`
 }

@@ -159,6 +159,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &hypershiftv1beta1.GCPPrivateServiceConnectStatusApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("GCPResourceReference"):
 		return &hypershiftv1beta1.GCPResourceReferenceApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("GCPServiceAccountsRef"):
+		return &hypershiftv1beta1.GCPServiceAccountsRefApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("GCPWorkloadIdentityConfig"):
 		return &hypershiftv1beta1.GCPWorkloadIdentityConfigApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("HostedCluster"):

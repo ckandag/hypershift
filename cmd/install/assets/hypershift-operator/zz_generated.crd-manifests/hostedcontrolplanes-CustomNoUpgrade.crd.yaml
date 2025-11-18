@@ -5118,6 +5118,11 @@ spec:
                               required to enable integrations for different controllers and operators.
                               This follows the AWS pattern of having different roles for different purposes.
                             properties:
+                              controlPlaneEmail:
+                                maxLength: 100
+                                minLength: 1
+                                pattern: ^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$
+                                type: string
                               nodePoolEmail:
                                 description: |-
                                   nodePoolEmail is the Google Service Account email for CAPG controllers
@@ -5129,6 +5134,7 @@ spec:
                                 pattern: ^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$
                                 type: string
                             required:
+                            - controlPlaneEmail
                             - nodePoolEmail
                             type: object
                         required:
