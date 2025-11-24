@@ -69,11 +69,8 @@ func ExpectedHCConditions(hostedCluster *hyperv1.HostedCluster) map[hyperv1.Cond
 		// GCP KMS validation - future support for GCP KMS secret encryption
 		// Following the same pattern as AWS and Azure
 		// Note: GCP KMS integration is not yet implemented but prepared for future use
-		if hostedCluster.Spec.SecretEncryption == nil || hostedCluster.Spec.SecretEncryption.KMS == nil {
-			// GCP KMS is not configured - this is expected for now
-			// When GCP KMS is implemented, we'll check for hostedCluster.Spec.SecretEncryption.KMS.GCP
-			// conditions[hyperv1.ValidGCPKMSConfig] = metav1.ConditionUnknown
-		}
+		// When GCP KMS is implemented, we'll check for hostedCluster.Spec.SecretEncryption.KMS.GCP
+		// conditions[hyperv1.ValidGCPKMSConfig] = metav1.ConditionUnknown
 	case hyperv1.KubevirtPlatform:
 		if hostedCluster.Spec.Networking.NetworkType == hyperv1.OVNKubernetes {
 			if hostedCluster.Annotations[hyperv1.ManagementPlatformAnnotation] == string(hyperv1.AWSPlatform) {

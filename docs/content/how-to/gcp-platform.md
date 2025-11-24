@@ -69,16 +69,19 @@ spec:
 
 ### Resource Labeling
 
-Automatic resource labeling for organization and billing:
+Automatic resource labeling for organization and billing. Labels can be updated after cluster creation and will be propagated to GCP resources where supported:
 
 ```yaml
 spec:
   platform:
     gcp:
       resourceLabels:
-        environment: "production"
-        team: "platform"
-        cost-center: "engineering"
+        - key: environment
+          value: production
+        - key: team
+          value: platform
+        - key: cost-center
+          value: engineering
 ```
 
 ## CAPG Integration
@@ -142,8 +145,10 @@ spec:
         serviceAccountsRef:
           nodePoolEmail: "capg-controller@my-gcp-project.iam.gserviceaccount.com"
       resourceLabels:
-        environment: "production"
-        team: "platform"
+        - key: environment
+          value: production
+        - key: team
+          value: platform
 ```
 
 ## Validation and Defaulting
