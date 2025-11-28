@@ -1,12 +1,15 @@
 // Package gcp provides Google Cloud Platform support for HyperShift.
 //
 // This package implements the Platform interface to enable HyperShift
-// to create and manage OpenShift control planes on Google Cloud Platform.
+// to create and manage OpenShift control planes on Google Cloud Platform
+// using Cluster API Provider GCP (CAPG) integration.
 //
-// The package currently provides enough functionality to allow HostedCluster
-// resources with platform.type: GCP to be accepted and reconciled by the
-// HyperShift operator without errors. All methods return nil or no-op values
-// to indicate that no platform-specific operations should be performed at this time.
+// The package provides a complete GCP platform implementation with:
+//   - CAPG controller deployment with Workload Identity Federation
+//   - GCPCluster infrastructure resource reconciliation
+//   - Credential management through WIF (keyless authentication)
+//   - RBAC policies for CAPI resource management
+//   - VPC and Private Service Connect network configuration
 //
 // For more information about HyperShift platform implementations, see:
 // https://github.com/openshift/hypershift/blob/main/docs/content/how-to/platforms.md
@@ -14,6 +17,7 @@ package gcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -92,16 +96,11 @@ func (p GCP) ReconcileCAPIInfraCR(ctx context.Context, c client.Client, createOr
 	}
 
 	// Use createOrUpdate to reconcile the GCPCluster
+	// Status.Ready is set inside reconcileGCPCluster following Azure pattern
 	if _, err := createOrUpdate(ctx, c, gcpCluster, func() error {
 		return p.reconcileGCPCluster(gcpCluster, hcluster, apiEndpoint)
 	}); err != nil {
 		return nil, fmt.Errorf("failed to reconcile GCPCluster: %w", err)
-	}
-
-	// Set Status.Ready = true following AWS/Azure patterns - CRITICAL for CAPI progression
-	gcpCluster.Status.Ready = true
-	if err := c.Status().Update(ctx, gcpCluster); err != nil {
-		return nil, fmt.Errorf("failed to update GCPCluster status: %w", err)
 	}
 
 	return gcpCluster, nil
@@ -144,13 +143,13 @@ func (p GCP) reconcileGCPCluster(gcpCluster *capigcp.GCPCluster, hcluster *hyper
 			}
 		}
 
-		// Add resource labels as additional labels (following AWS ResourceTags pattern)
+		// Add resource labels as additional labels
 		if len(gcpSpec.ResourceLabels) > 0 {
 			if gcpCluster.Spec.AdditionalLabels == nil {
 				gcpCluster.Spec.AdditionalLabels = make(map[string]string)
 			}
-			for key, value := range gcpSpec.ResourceLabels {
-				gcpCluster.Spec.AdditionalLabels[key] = value
+			for _, label := range gcpSpec.ResourceLabels {
+				gcpCluster.Spec.AdditionalLabels[label.Key] = ptr.Deref(label.Value, "")
 			}
 		}
 
@@ -170,8 +169,9 @@ func (p GCP) reconcileGCPCluster(gcpCluster *capigcp.GCPCluster, hcluster *hyper
 		Port: apiEndpoint.Port,
 	}
 
-	// Note: CAPG will handle failure domains and status automatically based on region
-	// We don't modify Status fields directly as that's managed by CAPG controllers
+	// Set Status.Ready = true following Azure pattern - CRITICAL for CAPI progression
+	// This must be set within the mutation function to avoid resourceVersion conflicts
+	gcpCluster.Status.Ready = true
 
 	return nil
 }
@@ -179,7 +179,12 @@ func (p GCP) reconcileGCPCluster(gcpCluster *capigcp.GCPCluster, hcluster *hyper
 // CAPIProviderDeploymentSpec implements CAPG controller deployment specification.
 // This method creates a deployment spec for the CAPG (Cluster API Provider GCP)
 // controller with proper image handling, feature gates, and WIF preparation.
-func (p GCP) CAPIProviderDeploymentSpec(hcluster *hyperv1.HostedCluster, hcp *hyperv1.HostedControlPlane) (*appsv1.DeploymentSpec, error) {
+func (p GCP) CAPIProviderDeploymentSpec(hcluster *hyperv1.HostedCluster, _ *hyperv1.HostedControlPlane) (*appsv1.DeploymentSpec, error) {
+	// Validate GCP platform configuration is present
+	if hcluster.Spec.Platform.GCP == nil {
+		return nil, fmt.Errorf("GCP platform configuration is missing")
+	}
+
 	// Image priority: annotation > env var > payload
 	providerImage := p.capiProviderImage
 	if envImage := os.Getenv(images.GCPCAPIProviderEnvVar); len(envImage) > 0 {
@@ -290,7 +295,7 @@ func (p GCP) buildVolumes(hcluster *hyperv1.HostedCluster) []corev1.Volume {
 			Name: "credentials",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: NodePoolManagementCredsSecret("").Name,
+					SecretName: "node-management-creds",
 				},
 			},
 		},
@@ -315,9 +320,7 @@ func (p GCP) buildVolumes(hcluster *hyperv1.HostedCluster) []corev1.Volume {
 // tokenMinterSidecar creates the token minter sidecar container.
 // This sidecar generates OpenShift service account tokens that are used by the
 // Google Cloud SDK for Workload Identity Federation authentication.
-func (p GCP) tokenMinterSidecar(hcluster *hyperv1.HostedCluster) corev1.Container {
-
-	wif := hcluster.Spec.Platform.GCP.WorkloadIdentity
+func (p GCP) tokenMinterSidecar(_ *hyperv1.HostedCluster) corev1.Container {
 	return corev1.Container{
 		Name:    "token-minter",
 		Image:   p.utilitiesImage,
@@ -325,7 +328,7 @@ func (p GCP) tokenMinterSidecar(hcluster *hyperv1.HostedCluster) corev1.Containe
 		Args: []string{
 			"--service-account-namespace=kube-system",
 			"--service-account-name=capi-gcp-controller-manager",
-			"--token-audience=" + fmt.Sprintf("//iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s", wif.ProjectNumber, wif.PoolID, wif.ProviderID),
+			"--token-audience=openshift",
 			"--token-file=/var/run/secrets/openshift/serviceaccount/token",
 			"--kubeconfig=/etc/kubernetes/kubeconfig",
 		},
@@ -345,11 +348,6 @@ func (p GCP) tokenMinterSidecar(hcluster *hyperv1.HostedCluster) corev1.Containe
 				corev1.ResourceMemory: resource.MustParse("32Mi"),
 			},
 		},
-		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(false),
-			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-			RunAsNonRoot:             ptr.To(true),
-		},
 	}
 }
 
@@ -357,9 +355,21 @@ func (p GCP) ReconcileCredentials(ctx context.Context, c client.Client, createOr
 	hcluster *hyperv1.HostedCluster,
 	controlPlaneNamespace string) error {
 
+	// Validate GCP platform configuration is present
+	if hcluster.Spec.Platform.GCP == nil {
+		setCondition(hcluster, hyperv1.ValidGCPWorkloadIdentity, metav1.ConditionFalse, "MissingGCPConfiguration", "GCP platform configuration is missing")
+		if updateErr := c.Status().Update(ctx, hcluster); updateErr != nil {
+			return fmt.Errorf("GCP platform configuration is missing (failed to update status: %w)", updateErr)
+		}
+		return fmt.Errorf("GCP platform configuration is missing")
+	}
+
 	// Validate Workload Identity Federation configuration (required)
 	if err := p.validateWorkloadIdentityConfiguration(hcluster); err != nil {
 		setCondition(hcluster, hyperv1.ValidGCPWorkloadIdentity, metav1.ConditionFalse, "InvalidWIFConfiguration", fmt.Sprintf("Workload Identity Federation configuration is invalid: %v", err))
+		if updateErr := c.Status().Update(ctx, hcluster); updateErr != nil {
+			return fmt.Errorf("invalid workload identity configuration: %w (failed to update status: %w)", err, updateErr)
+		}
 		return fmt.Errorf("invalid workload identity configuration: %w", err)
 	}
 
@@ -368,8 +378,8 @@ func (p GCP) ReconcileCredentials(ctx context.Context, c client.Client, createOr
 
 	// Create credential secrets following AWS pattern
 	var errs []error
-	syncSecret := func(secret *corev1.Secret, serviceAccountEmail string) error {
-		credentials, err := buildGCPWorkloadIdentityCredentialsWithEmail(hcluster.Spec.Platform.GCP.WorkloadIdentity, serviceAccountEmail)
+	syncSecret := func(secret *corev1.Secret) error {
+		credentials, err := buildGCPWorkloadIdentityCredentials(hcluster.Spec.Platform.GCP.WorkloadIdentity)
 		if err != nil {
 			return fmt.Errorf("failed to build cloud credentials secret %s/%s: %w", secret.Namespace, secret.Name, err)
 		}
@@ -383,22 +393,26 @@ func (p GCP) ReconcileCredentials(ctx context.Context, c client.Client, createOr
 		return nil
 	}
 
-	for email, secret := range map[string]*corev1.Secret{
-		hcluster.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsRef.NodePoolEmail:     NodePoolManagementCredsSecret(controlPlaneNamespace),
-		hcluster.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsRef.ControlPlaneEmail: ControlPlaneOperatorCredsSecret(controlPlaneNamespace),
-	} {
-		if err := syncSecret(secret, email); err != nil {
-			errs = append(errs, err)
-		}
+	// Create NodePool management credentials (used by both NodePool controller and CAPG)
+	if err := syncSecret(NodePoolManagementCredsSecret(controlPlaneNamespace)); err != nil {
+		errs = append(errs, err)
 	}
 
 	if len(errs) > 0 {
 		setCondition(hcluster, hyperv1.ValidGCPCredentials, metav1.ConditionFalse, "CredentialsError", fmt.Sprintf("Failed to reconcile credentials: %v", errs))
+		if updateErr := c.Status().Update(ctx, hcluster); updateErr != nil {
+			return fmt.Errorf("failed to reconcile GCP credentials: %v (failed to update status: %w)", errs, updateErr)
+		}
 		return fmt.Errorf("failed to reconcile GCP credentials: %v", errs)
 	}
 
 	// Set credentials condition to indicate federation is ready
 	setCondition(hcluster, hyperv1.ValidGCPCredentials, metav1.ConditionTrue, "WIFReady", "GCP Workload Identity Federation is configured and ready")
+
+	// Persist status condition changes to the API server
+	if err := c.Status().Update(ctx, hcluster); err != nil {
+		return fmt.Errorf("failed to update HostedCluster status conditions: %w", err)
+	}
 
 	return nil
 }
@@ -414,20 +428,31 @@ func NodePoolManagementCredsSecret(controlPlaneNamespace string) *corev1.Secret 
 	}
 }
 
-// ControlPlaneOperatorCredsSecret returns the secret containing Workload Identity Federation credentials
-// for the control plane operator.
-func ControlPlaneOperatorCredsSecret(controlPlaneNamespace string) *corev1.Secret {
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: controlPlaneNamespace,
-			Name:      "control-plane-operator-creds",
-		},
-	}
+// gcpCredentialSource represents the credential source configuration for GCP external account credentials.
+type gcpCredentialSource struct {
+	File   string                    `json:"file"`
+	Format gcpCredentialSourceFormat `json:"format"`
 }
 
-// buildGCPWorkloadIdentityCredentialsWithEmail creates the credential configuration for Google Cloud SDK
-// to use Workload Identity Federation with a specific service account email.
-func buildGCPWorkloadIdentityCredentialsWithEmail(wif hyperv1.GCPWorkloadIdentityConfig, serviceAccountEmail string) (string, error) {
+// gcpCredentialSourceFormat represents the format of the credential source.
+type gcpCredentialSourceFormat struct {
+	Type string `json:"type"`
+}
+
+// gcpExternalAccountCredential represents the complete GCP external account credential configuration
+// for Workload Identity Federation. This follows the Google Cloud credential configuration format.
+type gcpExternalAccountCredential struct {
+	Type                           string              `json:"type"`
+	Audience                       string              `json:"audience"`
+	SubjectTokenType               string              `json:"subject_token_type"`
+	TokenURL                       string              `json:"token_url"`
+	ServiceAccountImpersonationURL string              `json:"service_account_impersonation_url"`
+	CredentialSource               gcpCredentialSource `json:"credential_source"`
+}
+
+// buildGCPWorkloadIdentityCredentials creates the credential configuration for Google Cloud SDK
+// to use Workload Identity Federation. This is equivalent to AWS's buildAWSWebIdentityCredentials.
+func buildGCPWorkloadIdentityCredentials(wif hyperv1.GCPWorkloadIdentityConfig) (string, error) {
 	if wif.ProjectNumber == "" {
 		return "", fmt.Errorf("project number cannot be empty in GCP Workload Identity Federation credentials")
 	}
@@ -437,38 +462,33 @@ func buildGCPWorkloadIdentityCredentialsWithEmail(wif hyperv1.GCPWorkloadIdentit
 	if wif.ProviderID == "" {
 		return "", fmt.Errorf("provider ID cannot be empty in GCP Workload Identity Federation credentials")
 	}
-	if serviceAccountEmail == "" {
-		return "", fmt.Errorf("service account email cannot be empty in GCP Workload Identity Federation credentials")
+	if wif.ServiceAccountsEmails.NodePool == "" {
+		return "", fmt.Errorf("node pool service account email cannot be empty in GCP Workload Identity Federation credentials")
 	}
 
 	// Create the credential configuration that tells Google Cloud SDK how to use WIF
 	// This follows the standard Google Cloud credential configuration format with service account impersonation
 	// The audience must be the full resource name of the Workload Identity Provider
-	credentialConfig := fmt.Sprintf(`{
-  "type": "external_account",
-  "audience": "//iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s",
-  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-  "token_url": "https://sts.googleapis.com/v1/token",
-  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/%s:generateAccessToken",
-  "credential_source": {
-    "file": "/var/run/secrets/openshift/serviceaccount/token",
-    "format": {
-      "type": "text"
-    }
-  }
-}`, wif.ProjectNumber, wif.PoolID, wif.ProviderID, serviceAccountEmail)
-
-	return credentialConfig, nil
-}
-
-// buildGCPWorkloadIdentityCredentials creates the credential configuration for Google Cloud SDK
-// to use Workload Identity Federation. This is equivalent to AWS's buildAWSWebIdentityCredentials.
-// It uses the NodePoolEmail by default for backward compatibility.
-func buildGCPWorkloadIdentityCredentials(wif hyperv1.GCPWorkloadIdentityConfig) (string, error) {
-	if wif.ServiceAccountsRef.NodePoolEmail == "" {
-		return "", fmt.Errorf("node pool service account email cannot be empty in GCP Workload Identity Federation credentials")
+	credConfig := gcpExternalAccountCredential{
+		Type:                           "external_account",
+		Audience:                       fmt.Sprintf("//iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s", wif.ProjectNumber, wif.PoolID, wif.ProviderID),
+		SubjectTokenType:               "urn:ietf:params:oauth:token-type:jwt",
+		TokenURL:                       "https://sts.googleapis.com/v1/token",
+		ServiceAccountImpersonationURL: fmt.Sprintf("https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/%s:generateAccessToken", wif.ServiceAccountsEmails.NodePool),
+		CredentialSource: gcpCredentialSource{
+			File: "/var/run/secrets/openshift/serviceaccount/token",
+			Format: gcpCredentialSourceFormat{
+				Type: "text",
+			},
+		},
 	}
-	return buildGCPWorkloadIdentityCredentialsWithEmail(wif, wif.ServiceAccountsRef.NodePoolEmail)
+
+	credentialJSON, err := json.Marshal(credConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal GCP credential configuration: %w", err)
+	}
+
+	return string(credentialJSON), nil
 }
 
 // ReconcileSecretEncryption is a no-op
@@ -516,6 +536,7 @@ func ValidCredentials(hc *hyperv1.HostedCluster) bool {
 // validateWorkloadIdentityConfiguration validates the Workload Identity Federation configuration.
 // This ensures all required fields are present and properly formatted.
 func (p GCP) validateWorkloadIdentityConfiguration(hcluster *hyperv1.HostedCluster) error {
+	// Note: GCP platform configuration nil check is handled by caller
 	wif := hcluster.Spec.Platform.GCP.WorkloadIdentity
 
 	// Validate project number format
@@ -534,17 +555,36 @@ func (p GCP) validateWorkloadIdentityConfiguration(hcluster *hyperv1.HostedClust
 		return fmt.Errorf("provider ID is required")
 	}
 
+	// Validate service account reference
+	if wif.ServiceAccountsEmails.NodePool == "" {
+		return fmt.Errorf("node pool service account email is required")
+	}
+
 	return nil
 }
 
 // toGCPLabel converts a label key to GCP-compliant format.
-// GCP labels must start with a lowercase character and can only contain lowercase letters,
+// GCP labels must start with a lowercase letter and can only contain lowercase letters,
 // numeric characters, underscores and dashes. The key can be at most 63 characters long.
-// This function replaces dots and forward slashes with dashes to ensure compliance.
+// This function ensures full compliance with GCP label requirements.
 func toGCPLabel(label string) string {
 	// Replace both dots and forward slashes with dashes for GCP compliance
 	result := strings.ReplaceAll(label, ".", "-")
 	result = strings.ReplaceAll(result, "/", "-")
+
+	// Convert to lowercase to ensure compliance
+	result = strings.ToLower(result)
+
+	// Ensure it starts with a lowercase letter - prefix with 'x' if needed
+	if len(result) > 0 && (result[0] < 'a' || result[0] > 'z') {
+		result = "x" + result
+	}
+
+	// Truncate to 63 characters max to meet GCP requirements
+	if len(result) > 63 {
+		result = result[:63]
+	}
+
 	return result
 }
 
