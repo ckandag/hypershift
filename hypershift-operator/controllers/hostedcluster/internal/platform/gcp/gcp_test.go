@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/blang/semver"
 	. "github.com/onsi/gomega"
 
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
@@ -17,6 +16,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	"github.com/blang/semver"
 )
 
 func TestGCPPlatformInterface(t *testing.T) {

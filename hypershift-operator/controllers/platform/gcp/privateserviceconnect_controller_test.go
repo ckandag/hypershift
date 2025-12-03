@@ -5,19 +5,21 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/go-logr/logr/testr"
-	"google.golang.org/api/googleapi"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	hyperapi "github.com/openshift/hypershift/support/api"
 	"github.com/openshift/hypershift/support/upsert"
 	supportutil "github.com/openshift/hypershift/support/util"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	"github.com/go-logr/logr/testr"
+	"google.golang.org/api/googleapi"
 )
 
 // Note: Mock GCP Compute Service implementations would go here.
@@ -369,8 +371,8 @@ func TestReconcile_PausedUntil(t *testing.T) {
 
 	gcpPSC := &hyperv1.GCPPrivateServiceConnect{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-psc",
-			Namespace: "test-namespace",
+			Name:       "test-psc",
+			Namespace:  "test-namespace",
 			Finalizers: []string{"hypershift.openshift.io/gcp-private-service-connect"}, // Add finalizer so it gets past initial checks
 		},
 		Spec: hyperv1.GCPPrivateServiceConnectSpec{
@@ -492,7 +494,6 @@ func TestConstructURLs(t *testing.T) {
 		}
 	})
 }
-
 
 // TestServiceAttachmentStatusUpdate tests the critical condition logic that was causing the bug
 func TestServiceAttachmentStatusUpdate(t *testing.T) {
