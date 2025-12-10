@@ -11,6 +11,7 @@ import (
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	availabilityprober "github.com/openshift/hypershift/availability-prober"
 	hyperclient "github.com/openshift/hypershift/client/clientset/clientset"
+	provideridcmd "github.com/openshift/hypershift/cmd/providerid"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/awsprivatelink"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/gcpprivateserviceconnect"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/healthcheck"
@@ -99,6 +100,8 @@ func commandFor(name string) *cobra.Command {
 		cmd = syncfgconfigmap.NewRunCommand()
 	case "sync-global-pullsecret":
 		cmd = syncglobalpullsecret.NewRunCommand()
+	case "providerid-controller":
+		cmd = provideridcmd.NewCommand()
 	default:
 		// for the default case, there is no need
 		// to convert flags, return immediately
@@ -152,6 +155,7 @@ func defaultCommand() *cobra.Command {
 	cmd.AddCommand(kasbootstrap.NewRunCommand())
 	cmd.AddCommand(syncfgconfigmap.NewRunCommand())
 	cmd.AddCommand(syncglobalpullsecret.NewRunCommand())
+	cmd.AddCommand(provideridcmd.NewCommand())
 	return cmd
 }
 
