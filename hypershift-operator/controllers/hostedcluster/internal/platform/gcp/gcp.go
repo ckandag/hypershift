@@ -344,10 +344,17 @@ func (p GCP) ReconcileCredentials(ctx context.Context, c client.Client, createOr
 		return nil
 	}
 
-	for email, secret := range map[string]*corev1.Secret{
+	// Create credential secrets for all configured service accounts
+	credentialSecrets := map[string]*corev1.Secret{
 		hcluster.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsEmails.NodePool:     NodePoolManagementCredsSecret(controlPlaneNamespace),
 		hcluster.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsEmails.ControlPlane: ControlPlaneOperatorCredsSecret(controlPlaneNamespace),
-	} {
+	}
+	// Add storage credential secret if Storage GSA is configured
+	if storageGSA := hcluster.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsEmails.Storage; storageGSA != "" {
+		credentialSecrets[storageGSA] = GCPPDCloudCredentialsSecret(controlPlaneNamespace)
+	}
+
+	for email, secret := range credentialSecrets {
 		if err := syncSecret(secret, email); err != nil {
 			errs = append(errs, err)
 		}
@@ -390,6 +397,17 @@ func ControlPlaneOperatorCredsSecret(controlPlaneNamespace string) *corev1.Secre
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: controlPlaneNamespace,
 			Name:      "control-plane-operator-creds",
+		},
+	}
+}
+
+// GCPPDCloudCredentialsSecret returns the secret containing Workload Identity Federation credentials
+// for the GCP PD CSI Driver Operator to manage Persistent Disk storage operations.
+func GCPPDCloudCredentialsSecret(controlPlaneNamespace string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: controlPlaneNamespace,
+			Name:      "gcp-pd-cloud-credentials",
 		},
 	}
 }

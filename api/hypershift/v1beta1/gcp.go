@@ -281,6 +281,25 @@ type GCPServiceAccountsEmails struct {
 	// +kubebuilder:validation:MaxLength=100
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ControlPlane is immutable"
 	ControlPlane string `json:"controlPlane,omitempty"`
+
+	// storage is the Google Service Account email for the GCP PD CSI Driver
+	// that manages Persistent Disk storage operations (create, attach, delete volumes).
+	// This GSA requires the following IAM roles:
+	// - roles/compute.storageAdmin (Compute Storage Admin - for managing persistent disks)
+	// See cmd/infra/gcp/iam-bindings.json for the authoritative role definitions.
+	// Format: service-account-name@project-id.iam.gserviceaccount.com
+	//
+	// This is a user-provided value referencing a pre-created Google Service Account.
+	// Typically obtained from the output of `hypershift infra create gcp` which creates
+	// the required service accounts with appropriate IAM roles and WIF bindings.
+	//
+	// +optional
+	// +immutable
+	// +kubebuilder:validation:Pattern=`^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com$`
+	// +kubebuilder:validation:MinLength=38
+	// +kubebuilder:validation:MaxLength=100
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Storage is immutable"
+	Storage string `json:"storage,omitempty"`
 }
 
 // GCPNodePoolPlatform specifies the configuration of a NodePool when operating on GCP.

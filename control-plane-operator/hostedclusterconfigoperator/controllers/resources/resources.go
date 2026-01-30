@@ -1698,6 +1698,16 @@ func buildAWSWebIdentityCredentials(roleArn, region string) (string, error) {
 	return fmt.Sprintf(awsCredentialsTemplate, roleArn, region), nil
 }
 
+const gcpWIFCredentialsTemplate = `{"type":"external_account","audience":"//iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s","subject_token_type":"urn:ietf:params:oauth:token-type:jwt","token_url":"https://sts.googleapis.com/v1/token","service_account_impersonation_url":"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/%s:generateAccessToken","credential_source":{"file":"/var/run/secrets/openshift/serviceaccount/token","format":{"type":"text"}}}`
+
+// buildGCPWorkloadIdentityCredentials creates GCP WIF credential JSON for authenticating with GCP.
+func buildGCPWorkloadIdentityCredentials(wif hyperv1.GCPWorkloadIdentityConfig, serviceAccountEmail string) (string, error) {
+	if wif.ProjectNumber == "" || wif.PoolID == "" || wif.ProviderID == "" || serviceAccountEmail == "" {
+		return "", fmt.Errorf("GCP WIF credentials require projectNumber, poolID, providerID, and serviceAccountEmail")
+	}
+	return fmt.Sprintf(gcpWIFCredentialsTemplate, wif.ProjectNumber, wif.PoolID, wif.ProviderID, serviceAccountEmail), nil
+}
+
 func (r *reconciler) reconcileCloudCredentialSecrets(ctx context.Context, hcp *hyperv1.HostedControlPlane, log logr.Logger) []error {
 	var errs []error
 	switch hcp.Spec.Platform.Type {
@@ -1767,6 +1777,34 @@ func (r *reconciler) reconcileCloudCredentialSecrets(ctx context.Context, hcp *h
 		errs = azureresources.SetupOperandCredentials(ctx, r.client, r.CreateOrUpdateProvider, hcp, secretData, azureutil.IsAroHCP())
 		if len(errs) > 0 {
 			return errs
+		}
+	case hyperv1.GCPPlatform:
+		if hcp.Spec.Platform.GCP != nil && hcp.Spec.Platform.GCP.WorkloadIdentity.ServiceAccountsEmails.Storage != "" {
+			wif := hcp.Spec.Platform.GCP.WorkloadIdentity
+			storageGSA := wif.ServiceAccountsEmails.Storage
+
+			credentials, err := buildGCPWorkloadIdentityCredentials(wif, storageGSA)
+			if err != nil {
+				return []error{fmt.Errorf("failed to build GCP PD storage credentials: %w", err)}
+			}
+
+			secret := manifests.GCPPDStorageCloudCredsSecret()
+			ns := &corev1.Namespace{}
+			if err := r.client.Get(ctx, client.ObjectKey{Name: secret.Namespace}, ns); err != nil {
+				if apierrors.IsNotFound(err) {
+					log.Info("WARNING: cannot sync GCP PD cloud credential secret because namespace does not exist", "secret", client.ObjectKeyFromObject(secret))
+				} else {
+					errs = append(errs, fmt.Errorf("failed to get secret namespace %s: %w", secret.Namespace, err))
+				}
+			} else {
+				if _, err := r.CreateOrUpdate(ctx, r.client, secret, func() error {
+					secret.Data = map[string][]byte{"service_account.json": []byte(credentials)}
+					secret.Type = corev1.SecretTypeOpaque
+					return nil
+				}); err != nil {
+					errs = append(errs, fmt.Errorf("failed to reconcile GCP PD cloud credential secret %s/%s: %w", secret.Namespace, secret.Name, err))
+				}
+			}
 		}
 	case hyperv1.OpenStackPlatform:
 		credentialsSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: hcp.Namespace, Name: hcp.Spec.Platform.OpenStack.IdentityRef.Name}}
@@ -2934,6 +2972,8 @@ func (r *reconciler) reconcileStorage(ctx context.Context, hcp *hyperv1.HostedCo
 	switch hcp.Spec.Platform.Type {
 	case hyperv1.AWSPlatform:
 		driverNames = []operatorv1.CSIDriverName{operatorv1.AWSEBSCSIDriver}
+	case hyperv1.GCPPlatform:
+		driverNames = []operatorv1.CSIDriverName{operatorv1.GCPPDCSIDriver}
 	case hyperv1.OpenStackPlatform:
 		driverNames = []operatorv1.CSIDriverName{
 			operatorv1.CinderCSIDriver,

@@ -131,6 +131,19 @@ func checkOperandsRolloutStatus(cpContext component.WorkloadContext) (bool, erro
 				ReleaseImageKey: "azure-file-csi-driver",
 			},
 		}
+	case hyperv1.GCPPlatform:
+		operandsDeploymentsList = []operand{
+			{
+				DeploymentName:  "gcp-pd-csi-driver-operator",
+				ContainerName:   "gcp-pd-csi-driver-operator",
+				ReleaseImageKey: "gcp-pd-csi-driver-operator",
+			},
+			{
+				DeploymentName:  "gcp-pd-csi-driver-controller",
+				ContainerName:   "csi-driver",
+				ReleaseImageKey: "gcp-pd-csi-driver",
+			},
+		}
 	default:
 		return true, nil
 	}

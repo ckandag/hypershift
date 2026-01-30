@@ -69,3 +69,17 @@ func AzureFileCSICloudCredsSecret() *corev1.Secret {
 		},
 	}
 }
+
+// GCP credential secrets for hosted cluster operators
+
+// GCPPDStorageCloudCredsSecret returns the secret for the GCP PD CSI driver
+// in the guest cluster. This secret contains WIF credentials for the CSI
+// node daemonset to authenticate with GCP for volume operations.
+func GCPPDStorageCloudCredsSecret() *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "openshift-cluster-csi-drivers",
+			Name:      "gcp-pd-cloud-credentials",
+		},
+	}
+}
