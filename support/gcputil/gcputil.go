@@ -29,6 +29,17 @@ type ExternalAccountCredential struct {
 	CredentialSource               CredentialSource `json:"credential_source"`
 }
 
+// WorkloadIdentityAudience returns the Workload Identity Federation provider resource URI that
+// scopes a GCP token to a single WIF provider. The cloud token minted for a workload must carry
+// this exact value as its `aud` claim so it matches the `audience` in the external_account
+// credential configuration (see BuildWorkloadIdentityCredentials) that the GCP STS token exchange
+// validates. Scoping the audience to the provider URI (rather than a generic value) prevents a
+// leaked token from being replayed against any other system that trusts the same OIDC issuer.
+func WorkloadIdentityAudience(wif hyperv1.GCPWorkloadIdentityConfig) string {
+	return fmt.Sprintf("//iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s",
+		wif.ProjectNumber, wif.PoolID, wif.ProviderID)
+}
+
 // BuildWorkloadIdentityCredentials creates the credential configuration JSON for Google Cloud SDK
 // to use Workload Identity Federation with a specific service account email.
 func BuildWorkloadIdentityCredentials(wif hyperv1.GCPWorkloadIdentityConfig, serviceAccountEmail string) (string, error) {
@@ -47,7 +58,7 @@ func BuildWorkloadIdentityCredentials(wif hyperv1.GCPWorkloadIdentityConfig, ser
 
 	credConfig := ExternalAccountCredential{
 		Type:                           "external_account",
-		Audience:                       fmt.Sprintf("//iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s", wif.ProjectNumber, wif.PoolID, wif.ProviderID),
+		Audience:                       WorkloadIdentityAudience(wif),
 		SubjectTokenType:               "urn:ietf:params:oauth:token-type:jwt",
 		TokenURL:                       "https://sts.googleapis.com/v1/token",
 		ServiceAccountImpersonationURL: fmt.Sprintf("https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/%s:generateAccessToken", serviceAccountEmail),

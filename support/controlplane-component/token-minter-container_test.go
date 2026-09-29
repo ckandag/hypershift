@@ -163,6 +163,8 @@ func TestInjectTokenMinterContainer(t *testing.T) {
 		g.Expect(podSpec.InitContainers[0].Name).To(Equal("cloud-token-minter"))
 		g.Expect(podSpec.InitContainers[1].Name).To(Equal("apiserver-token-minter"))
 		g.Expect(podSpec.Containers).To(HaveLen(1), "should not add token-minter to regular containers")
+		// AWS keeps the generic "openshift" cloud token audience.
+		g.Expect(podSpec.InitContainers[0].Args).To(ContainElement("--token-audience=openshift"))
 	})
 
 	t.Run("When CloudAndAPIServerToken on AWS without native sidecars it should inject two regular containers", func(t *testing.T) {
@@ -214,6 +216,13 @@ func TestInjectTokenMinterContainer(t *testing.T) {
 				Spec: hyperv1.HostedControlPlaneSpec{
 					Platform: hyperv1.PlatformSpec{
 						Type: hyperv1.GCPPlatform,
+						GCP: &hyperv1.GCPPlatformSpec{
+							WorkloadIdentity: hyperv1.GCPWorkloadIdentityConfig{
+								ProjectNumber: "123456789",
+								PoolID:        "test-wi-pool",
+								ProviderID:    "test-k8s-provider",
+							},
+						},
 					},
 				},
 			},
@@ -226,6 +235,11 @@ func TestInjectTokenMinterContainer(t *testing.T) {
 		g.Expect(podSpec.InitContainers).To(HaveLen(1))
 		g.Expect(podSpec.InitContainers[0].Name).To(Equal("cloud-token-minter"))
 		g.Expect(podSpec.Containers).To(HaveLen(1), "should not add token-minter to regular containers")
+		// GCP must scope the cloud token audience to the WIF provider resource URI, matching
+		// the audience in the external_account credential config the workloads consume.
+		g.Expect(podSpec.InitContainers[0].Args).To(ContainElement(
+			"--token-audience=//iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/test-wi-pool/providers/test-k8s-provider",
+		))
 	})
 
 	t.Run("When KubeAPIServerToken on non-cloud platform with native sidecars it should inject one init container", func(t *testing.T) {

@@ -15,6 +15,28 @@ const (
 	testProviderID       = "test-provider"
 )
 
+func TestWorkloadIdentityAudience(t *testing.T) {
+	t.Parallel()
+	g := NewWithT(t)
+
+	wif := hyperv1.GCPWorkloadIdentityConfig{
+		ProjectNumber: testProjectNumber,
+		PoolID:        testPoolID,
+		ProviderID:    testProviderID,
+	}
+
+	audience := WorkloadIdentityAudience(wif)
+	g.Expect(audience).To(Equal(
+		"//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/test-pool/providers/test-provider",
+	))
+
+	// The audience the token-minter stamps onto the cloud token must be identical to the
+	// audience embedded in the external_account credential config, or the STS exchange fails.
+	credentials, err := BuildWorkloadIdentityCredentials(wif, testImageRegistryGSA)
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(credentials).To(ContainSubstring(`"audience":"` + audience + `"`))
+}
+
 func TestBuildWorkloadIdentityCredentials(t *testing.T) {
 	t.Parallel()
 	g := NewWithT(t)

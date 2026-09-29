@@ -7,6 +7,7 @@ import (
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"github.com/openshift/hypershift/support/azureutil"
 	"github.com/openshift/hypershift/support/config"
+	"github.com/openshift/hypershift/support/gcputil"
 	"github.com/openshift/hypershift/support/podspec"
 
 	corev1 "k8s.io/api/core/v1"
@@ -118,6 +119,13 @@ func (opts TokenMinterContainerOptions) buildContainer(hcp *hyperv1.HostedContro
 	switch tokenType {
 	case CloudToken:
 		audience = "openshift"
+		// GCP scopes the cloud token audience to the WIF provider resource URI (best practice
+		// against confused-deputy / token-replay attacks) rather than the generic "openshift"
+		// value shared by AWS and Azure. It must match the `audience` in the external_account
+		// credential config the workloads consume, so both are built from gcputil.
+		if hcp.Spec.Platform.Type == hyperv1.GCPPlatform && hcp.Spec.Platform.GCP != nil {
+			audience = gcputil.WorkloadIdentityAudience(hcp.Spec.Platform.GCP.WorkloadIdentity)
+		}
 	case KubeAPIServerToken:
 		audience = hcp.Spec.IssuerURL
 	}
